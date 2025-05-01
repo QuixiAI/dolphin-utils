@@ -19,7 +19,9 @@ def main():
     args = parse_args()
     
     try:
-        if not core.SAFETENSORS_AVAILABLE:
+        try:
+            import safetensors
+        except ImportError:
             print("Warning: safetensors package not installed. Shape extraction may be limited.")
             print("Install with: pip install safetensors")
         
