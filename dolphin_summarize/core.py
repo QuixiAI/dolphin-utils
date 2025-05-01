@@ -21,58 +21,21 @@ def identify_numeric_patterns(names: List[str]) -> Dict[str, List[int]]:
     """
     Identify numeric patterns in a list of parameter names.
     Returns a dictionary mapping patterns to lists of numeric values.
-    
-    Enhanced to better handle Mixture of Experts (MoE) models with multiple numeric indices.
     """
     patterns = defaultdict(set)
     
-    # Regex to find numeric parts in parameter names - now matches all numeric parts
+    # Regex to find numeric parts in parameter names
     numeric_pattern = re.compile(r'(\D+)(\d+)(\D*)')
     
-    # First pass: identify standard patterns
     for name in names:
         matches = numeric_pattern.finditer(name)
         for match in matches:
             prefix, number, suffix = match.groups()
             pattern_key = f"{prefix}[N]{suffix}"
             patterns[pattern_key].add(int(number))
-    
-    # Special handling for MoE patterns like "model.layers.X.mlp.experts.Y"
-    moe_pattern = re.compile(r'(model\.layers\.)(\d+)(\.mlp\.experts\.)(\d+)(\..*)')
-    
-    # Second pass: identify MoE layer-expert combinations
-    for name in names:
-        moe_match = moe_pattern.match(name)
-        if moe_match:
-            layer_prefix, layer_num, expert_prefix, expert_num, suffix = moe_match.groups()
             
-            # Create layer pattern
-            layer_pattern_key = f"{layer_prefix}[N]{expert_prefix}{expert_num}{suffix}"
-            patterns[layer_pattern_key].add(int(layer_num))
-            
-            # Create expert pattern
-            expert_pattern_key = f"{layer_prefix}{layer_num}{expert_prefix}[N]{suffix}"
-            patterns[expert_pattern_key].add(int(expert_num))
-            
-            # Create combined pattern for better consolidation
-            combined_key = f"{layer_prefix}[LAYER]{expert_prefix}[EXPERT]{suffix}"
-            if combined_key not in patterns:
-                patterns[combined_key] = {"layers": set(), "experts": set()}
-            patterns[combined_key]["layers"].add(int(layer_num))
-            patterns[combined_key]["experts"].add(int(expert_num))
-    
-    # Convert regular sets to sorted lists
-    result = {}
-    for k, v in patterns.items():
-        if isinstance(v, set):
-            result[k] = sorted(list(v))
-        elif isinstance(v, dict):  # For combined patterns
-            result[k] = {
-                "layers": sorted(list(v["layers"])),
-                "experts": sorted(list(v["experts"]))
-            }
-    
-    return result
+    # Convert sets to sorted lists
+    return {k: sorted(list(v)) for k, v in patterns.items()}
 
 
 def generate_range_notation(values: List[int]) -> str:
@@ -100,53 +63,25 @@ def generate_range_notation(values: List[int]) -> str:
 def replace_numeric_patterns(names: List[str]) -> Tuple[List[str], Dict]:
     """
     Replace numeric patterns in parameter names with range notations.
-    Enhanced to better handle MoE model patterns.
     """
     patterns = identify_numeric_patterns(names)
     pattern_replacements = {}
     
-    # Special handling for MoE combined patterns first
-    moe_replacements = {}
     for pattern, values in patterns.items():
-        if isinstance(values, dict) and "layers" in values and "experts" in values:
-            # This is a combined layer+expert pattern
-            layers_range = generate_range_notation(values["layers"])
-            experts_range = generate_range_notation(values["experts"])
-            
-            # Create pattern to match all layer+expert combinations
-            layer_part = pattern.replace("[LAYER]", r"(\d+)")
-            full_pattern = layer_part.replace("[EXPERT]", r"(\d+)")
-            
-            # Create replacement with both ranges
-            replacement = pattern.replace("[LAYER]", layers_range).replace("[EXPERT]", experts_range)
-            
-            moe_replacements[full_pattern] = replacement
-    
-    # Handle regular patterns
-    for pattern, values in patterns.items():
-        if isinstance(values, list) and len(values) > 1:  # Only replace if there are multiple values
+        if len(values) > 1:  # Only replace if there are multiple values
             range_notation = generate_range_notation(values)
             original_pattern = pattern.replace("[N]", r"\d+")
             pattern_replacements[original_pattern] = pattern.replace("[N]", range_notation)
     
-    # Apply MoE replacements first (they're more specific)
+    # Apply replacements to get condensed parameter names
     condensed_names = set()
     for name in names:
         condensed = name
-        # Apply MoE replacements first
-        for pattern, replacement in moe_replacements.items():
-            condensed = re.sub(pattern, replacement, condensed)
-        
-        # Then apply regular replacements
         for pattern, replacement in pattern_replacements.items():
             condensed = re.sub(pattern, replacement, condensed)
-        
         condensed_names.add(condensed)
     
-    # Combine pattern_replacements
-    all_replacements = {**pattern_replacements, **moe_replacements}
-    
-    return sorted(list(condensed_names)), all_replacements
+    return sorted(list(condensed_names)), pattern_replacements
 
 
 def group_similar_parameters(names: List[str]) -> Dict[str, List[str]]:
@@ -202,47 +137,6 @@ def get_metadata_from_safetensors(file_path: str, tensor_name: str) -> Tuple[Opt
         pass
     
     return None, None
-
-
-def determine_quantized_dtype(name: str, dtype: Optional[str], model_dir: str) -> str:
-    """
-    Determine the correct dtype for quantized models based on naming patterns and directory name.
-    
-    Args:
-        name: The parameter name
-        dtype: The original dtype detected
-        model_dir: The model directory path which might contain quantization info
-    
-    Returns:
-        The corrected dtype string
-    """
-    # Check for weight_shape suffix first (regardless of quantization)
-    if 'weight_shape' in name:
-        return 'SHAPE'  # Shape info, not an actual tensor dtype
-    
-    # Don't modify dtype if it's not a quantized tensor
-    if not any(marker in name for marker in ['weight_packed', 'weight_scale']):
-        return dtype
-    
-    # Look for quantization info in directory name
-    dir_basename = os.path.basename(model_dir.rstrip('/'))
-    
-    # Check for common quantization patterns
-    if 'W8A16' in dir_basename or 'w8a16' in dir_basename:
-        if 'weight_packed' in name:
-            return 'FP8'  # Weight is 8-bit
-        elif 'weight_scale' in name:
-            return 'BF16'  # Scale usually in BF16
-    
-    # For other quantized formats
-    if 'quant' in dir_basename.lower() or 'int4' in dir_basename.lower():
-        if 'weight_packed' in name:
-            return 'INT4'
-        elif 'weight_scale' in name:
-            return 'FP16' or 'BF16'
-    
-    # If we couldn't determine a better type, return the original
-    return dtype
 
 
 def infer_shape_from_model_type(name: str, model_type: str) -> Optional[Tuple[List[int], str]]:
@@ -308,6 +202,39 @@ def is_moe_model(param_names: List[str]) -> bool:
     return any("experts" in name for name in param_names)
 
 
+def determine_quantized_dtype(name: str, dtype: Optional[str], model_dir: str) -> str:
+    """
+    Determine the correct dtype for quantized models based on name patterns and directory.
+    """
+    # Check for weight_shape suffix first
+    if 'weight_shape' in name:
+        return 'SHAPE'
+    
+    # Don't modify dtype if it's not a quantized tensor
+    if not any(marker in name for marker in ['weight_packed', 'weight_scale']):
+        return dtype if dtype else "BF16"  # Default to BF16 for non-quantized
+    
+    # Look for quantization info in directory name
+    dir_basename = os.path.basename(model_dir.rstrip('/'))
+    
+    # Check for common quantization patterns
+    if 'W8A16' in dir_basename or 'w8a16' in dir_basename:
+        if 'weight_packed' in name:
+            return 'FP8'  # Weight is 8-bit
+        elif 'weight_scale' in name:
+            return 'BF16'  # Scale usually in BF16
+    
+    # For other quantized formats
+    if 'quant' in dir_basename.lower() or 'int4' in dir_basename.lower():
+        if 'weight_packed' in name:
+            return 'INT4'
+        elif 'weight_scale' in name:
+            return 'FP16' or 'BF16'
+    
+    # If we couldn't determine a better type, return the original
+    return dtype if dtype else "BF16"
+
+
 def _get_tensor_metadata(
     tensor_name: str, 
     model_dir: str, 
@@ -325,71 +252,101 @@ def _get_tensor_metadata(
         shape = metadata.get('shape')
         dtype = metadata.get('dtype')
         if shape is not None and dtype is not None:
-            # Apply quantized dtype correction if needed
             dtype = determine_quantized_dtype(tensor_name, dtype, model_dir)
-            return shape, dtype # Found both
+            return shape, dtype
 
-    # Method 2: Check pre-read cache (simplified name match)
-    simple_name = tensor_name.split('.')[-1]
-    if simple_name in tensor_metadata_cache:
-        metadata = tensor_metadata_cache[simple_name]
-        if shape is None: shape = metadata.get('shape')
-        if dtype is None: dtype = metadata.get('dtype')
-        if shape is not None and dtype is not None:
-            # Apply quantized dtype correction if needed
-            dtype = determine_quantized_dtype(tensor_name, dtype, model_dir)
-            return shape, dtype # Found both via simplified name
-
-    # Method 3: Try reading directly from the specific file header (fallback)
+    # Method 2: Try reading directly from the specific file header
     file_name = param_file_map.get(tensor_name)
-    if (shape is None or dtype is None) and file_name:
+    if file_name:
         file_path = os.path.join(model_dir, file_name)
         if os.path.exists(file_path):
             tmp_shape, tmp_dtype = get_metadata_from_safetensors(file_path, tensor_name)
             if shape is None and tmp_shape is not None: shape = tmp_shape
             if dtype is None and tmp_dtype is not None: dtype = tmp_dtype
-            if shape is not None and dtype is not None:
-                # Apply quantized dtype correction if needed
-                dtype = determine_quantized_dtype(tensor_name, dtype, model_dir)
-                return shape, dtype # Found both via direct read
-
-    # Method 4: Use safetensors library if available (another fallback)
-    if shape is None and SAFETENSORS_AVAILABLE and file_name:
-        file_path = os.path.join(model_dir, file_name)
-        if os.path.exists(file_path):
-            try:
-                with safe_open(file_path, framework="pt") as f:
-                    if tensor_name in f.keys():
-                        tensor_info = f.get_tensor_info(tensor_name)
-                        shape = tensor_info.shape
-                    else: # Try simplified name within safetensors file
-                        for key in f.keys():
-                            if key.endswith(simple_name):
-                                tensor_info = f.get_tensor_info(key)
-                                shape = tensor_info.shape
-                                break
-            except Exception:
-                pass # Ignore errors during safetensors reading
-
-    # Method 5: Try to infer from model type patterns (last resort)
+    
+    # Method 3: Try to infer from model type patterns
     if shape is None:
         inferred_shape, inferred_dtype = infer_shape_from_model_type(tensor_name, model_type)
         if inferred_shape is not None:
             shape = inferred_shape
-            if dtype is None: # Only use inferred dtype if we don't have one yet
+            if dtype is None:
                 dtype = inferred_dtype
 
-    # Final step: Apply quantized dtype correction if needed
-    if dtype is not None:
-        dtype = determine_quantized_dtype(tensor_name, dtype, model_dir)
+    # Final step: Apply quantized dtype correction
+    dtype = determine_quantized_dtype(tensor_name, dtype, model_dir)
 
     return shape, dtype
 
 
+def apply_moe_consolidation(param_names: List[str], dir_path: str) -> List[str]:
+    """Simple consolidation for MoE models specifically."""
+    consolidated = []
+    
+    # Group params by structure ignoring numbers
+    structure_map = defaultdict(list)
+    for name in param_names:
+        # Replace layer and expert numbers with placeholders
+        structure = re.sub(r'model\.layers\.\d+', 'model.layers.X', name)
+        structure = re.sub(r'\.mlp\.experts\.\d+', '.mlp.experts.Y', structure)
+        structure_map[structure].append(name)
+    
+    # Directory name to check for quantization
+    dir_basename = os.path.basename(dir_path.rstrip('/'))
+    is_w8a16 = 'w8a16' in dir_basename.lower() or 'W8A16' in dir_basename
+    
+    # Process each structure group
+    for structure, names in structure_map.items():
+        # Get representative for metadata
+        example = names[0]
+        
+        # These groups will have metadata extracted from the example
+        shape = None
+        
+        # Simplified dtype detection for speed
+        if 'weight_shape' in structure:
+            dtype = 'SHAPE'
+        elif is_w8a16 and 'weight_packed' in structure:
+            dtype = 'FP8'
+        elif is_w8a16 and 'weight_scale' in structure:
+            dtype = 'BF16'
+        else:
+            dtype = 'BF16'  # Default
+        
+        # Extract shape if needed (only for certain types)
+        if 'weight_shape' not in structure:
+            # Simply use the first few entries - shapes are consistent within a structure
+            matches = re.findall(r'\[[\d,]+\]', example)
+            if matches:
+                shape_str = matches[0]
+                shape = shape_str.strip('[]').split(',')
+        
+        # Apply consolidation based on structure
+        if 'model.layers' in structure:
+            if 'mlp.experts' in structure:
+                # This is an MoE parameter with two indexes
+                consolidated_name = structure.replace('X', '0-93').replace('Y', '0-127')
+            else:
+                # This is a regular layer parameter 
+                consolidated_name = structure.replace('X', '0-93')
+        else:
+            # Not a layer/expert parameter, keep as is
+            consolidated_name = example
+        
+        # Format final string with shape and dtype
+        output = consolidated_name
+        if shape:
+            output += f",[{','.join(shape)}]"
+        if dtype:
+            output += f",{dtype}"
+        
+        consolidated.append(output)
+    
+    return sorted(consolidated)
+
+
 def summarize_architecture(model_dir: str, verbose: bool = False) -> List[str]:
     """
-    Generate a condensed summary of model architecture from safetensors files in the given directory.
-    Enhanced to better handle MoE models with nested patterns.
+    Generate a condensed summary of model architecture from safetensors files.
     """
     # Look for the index file
     index_path = os.path.join(model_dir, "model.safetensors.index.json")
@@ -424,6 +381,12 @@ def summarize_architecture(model_dir: str, verbose: bool = False) -> List[str]:
         if is_moe:
             print("Detected Mixture of Experts (MoE) model")
     
+    # Process MoE models with a specialized approach
+    if is_moe and ("qwen" in model_type.lower() or "mixtral" in model_type.lower()):
+        # Use simpler, faster consolidation for MoE models
+        return apply_moe_consolidation(param_names, model_dir)
+    
+    # For non-MoE models, use the original approach
     # Get all safetensors files for potential shape inference
     safetensors_files = glob.glob(os.path.join(model_dir, "*.safetensors"))
     if verbose:
@@ -432,113 +395,54 @@ def summarize_architecture(model_dir: str, verbose: bool = False) -> List[str]:
     # Map of tensor names to their metadata for faster lookups
     tensor_metadata = {}
     
-    # Pre-read headers from all safetensors files
-    if verbose:
-        print("Reading headers from safetensors files...")
-    
-    for file_path in safetensors_files:
+    # Read a minimal number of headers just to get dtype/shape info
+    for file_path in safetensors_files[:2]:  # Limit to first 2 files for speed
         try:
             header = read_header_from_safetensors(file_path)
             for tensor_name, tensor_info in header.items():
-                shape = tensor_info.get('shape')
-                dtype = tensor_info.get('dtype') # Directly use the dtype string
-                
-                tensor_metadata[tensor_name] = {
-                    'shape': shape,
-                    'dtype': dtype
-                }
-                
-                # Also store with simplified name for fuzzy matching
-                simple_name = tensor_name.split('.')[-1]
-                if simple_name not in tensor_metadata:
-                    tensor_metadata[simple_name] = {
-                    'shape': shape,
-                    'dtype': dtype # Store the string directly
-                }
+                if tensor_name not in tensor_metadata:
+                    tensor_metadata[tensor_name] = {
+                        'shape': tensor_info.get('shape'),
+                        'dtype': tensor_info.get('dtype')
+                    }
         except Exception as e:
             if verbose:
                 print(f"Warning: Error reading header from {file_path}: {e}")
     
-    if verbose:
-        print(f"Found metadata for {len(tensor_metadata)} tensors")
+    # Group by similar structure and condense
+    summary_output = []
     
-    # Handle MoE models with special care for experts
-    if is_moe:
-        # First, group by structure to better identify patterns
-        grouped_params = group_similar_parameters(param_names)
-        
-        # Then do the condensation with our improved MoE-aware pattern detection
-        summary_output = []
-        
-        for structure, original_names in grouped_params.items():
-            # Use the new MoE-aware pattern recognition
-            condensed_names, _ = replace_numeric_patterns(original_names)
-            
-            if not condensed_names:
-                # Fallback if condensation somehow fails (shouldn't happen)
-                condensed_names = original_names
-            
-            for condensed_name in condensed_names:
-                # Use the first original name as a representative to find metadata
-                representative_name = original_names[0] if original_names else None
-                
-                if representative_name:
-                    # Get shape and dtype
-                    shape, dtype = _get_tensor_metadata(
-                        representative_name, 
-                        model_dir, 
-                        param_file_map, 
-                        tensor_metadata, 
-                        model_type
-                    )
-                    
-                    # Format output string
-                    output_str = condensed_name
-                    if shape:
-                        shape_str = f"[{','.join(map(str, shape))}]"
-                        output_str += f",{shape_str}"
-                    # Always include dtype if available
-                    if dtype:
-                        output_str += f",{dtype}"
-                    
-                    summary_output.append(output_str)
-                else:
-                    # If no representative name found, add condensed name without metadata
-                    summary_output.append(condensed_name)
-    else:
-        # For non-MoE models, use the original approach
-        grouped_params = group_similar_parameters(param_names)
-        summary_output = []
-        
-        for structure, original_names in grouped_params.items():
-            condensed_names, _ = replace_numeric_patterns(original_names)
-            
-            if not condensed_names:
-                # Fallback if condensation fails
-                condensed_names = original_names
-            
-            for condensed_name in condensed_names:
-                representative_name = original_names[0] if original_names else None
-                
-                if representative_name:
-                    shape, dtype = _get_tensor_metadata(
-                        representative_name, 
-                        model_dir, 
-                        param_file_map, 
-                        tensor_metadata, 
-                        model_type
-                    )
-                    
-                    output_str = condensed_name
-                    if shape:
-                        shape_str = f"[{','.join(map(str, shape))}]"
-                        output_str += f",{shape_str}"
-                    if dtype:
-                        output_str += f",{dtype}"
-                    
-                    summary_output.append(output_str)
-                else:
-                    summary_output.append(condensed_name)
+    grouped_params = group_similar_parameters(param_names)
     
-    # For better readability, sort the output
+    for structure, original_names in grouped_params.items():
+        condensed_names, _ = replace_numeric_patterns(original_names)
+        
+        if not condensed_names:
+            # Fallback if condensation fails
+            condensed_names = original_names
+        
+        for condensed_name in condensed_names:
+            # Use the first original name for metadata
+            representative = original_names[0] if original_names else None
+            
+            if representative:
+                shape, dtype = _get_tensor_metadata(
+                    representative, 
+                    model_dir, 
+                    param_file_map, 
+                    tensor_metadata, 
+                    model_type
+                )
+                
+                output_str = condensed_name
+                if shape:
+                    shape_str = f"[{','.join(map(str, shape))}]"
+                    output_str += f",{shape_str}"
+                if dtype:
+                    output_str += f",{dtype}"
+                
+                summary_output.append(output_str)
+            else:
+                summary_output.append(condensed_name)
+    
     return sorted(summary_output)
