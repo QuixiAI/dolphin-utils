@@ -1,0 +1,2 @@
+# Optional, but recommended for full shape extraction
+safetensors
