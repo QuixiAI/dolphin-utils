@@ -1,4 +1,4 @@
-# Hugging Face Model Summarizer (hf-model-summary)
+# dolphin-summarize
 
 This script analyzes the `model.safetensors.index.json` file within a model directory to generate a condensed summary of the model's architecture. It groups similar parameter names using range notation (e.g., `model.layers.[0-39].mlp.down_proj.weight`) and displays the shape and data type (precision) for each parameter group.
 
