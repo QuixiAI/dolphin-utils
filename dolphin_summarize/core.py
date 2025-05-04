@@ -145,30 +145,47 @@ def summarize_architecture(model_dir: str, verbose: bool = False) -> List[str]:
     """
     # Look for the index file
     index_path = os.path.join(model_dir, "model.safetensors.index.json")
+    param_names = []
+    param_file_map = {}
     
-    if not os.path.exists(index_path):
-        # Try to find any .json file that might be the index
-        json_files = glob.glob(os.path.join(model_dir, "*.json"))
-        if json_files:
-            index_path = json_files[0]
+    if os.path.exists(index_path):
+        # Load the JSON file
+        with open(index_path, 'r') as f:
+            data = json.load(f)
+        
+        if "weight_map" in data:
+            # Extract parameter names and file paths
+            param_file_map = data["weight_map"]
+            param_names = list(param_file_map.keys())
+            
             if verbose:
-                print(f"Using {index_path} as index file")
+                print(f"Found {len(param_names)} parameters from index file")
         else:
-            raise ValueError(f"Could not find model.safetensors.index.json in {model_dir}")
+            if verbose:
+                print("The index file does not contain a 'weight_map' field")
     
-    # Load the JSON file
-    with open(index_path, 'r') as f:
-        data = json.load(f)
-    
-    if "weight_map" not in data:
-        raise ValueError("The JSON file does not contain a 'weight_map' field")
-    
-    # Extract parameter names and file paths
-    param_file_map = data["weight_map"]
-    param_names = list(param_file_map.keys())
-    
-    if verbose:
-        print(f"Found {len(param_names)} parameters")
+    # If we don't have parameters yet, try direct safetensors files
+    if not param_names:
+        safetensors_files = glob.glob(os.path.join(model_dir, "*.safetensors"))
+        
+        if not safetensors_files:
+            raise ValueError(f"Could not find any safetensors files in {model_dir}")
+        
+        # Extract parameter names directly from safetensors headers
+        for sf_file in safetensors_files:
+            header = read_header_from_safetensors(sf_file)
+            file_params = list(header.keys())
+            param_names.extend(file_params)
+            
+            # Map each parameter to its file
+            for param in file_params:
+                param_file_map[param] = os.path.basename(sf_file)
+        
+        if verbose:
+            print(f"Found {len(param_names)} parameters from direct safetensors inspection")
+            
+        if not param_names:
+            raise ValueError("Could not extract any parameter names from safetensors files")
     
     # Get all safetensors files for metadata extraction
     safetensors_files = glob.glob(os.path.join(model_dir, "*.safetensors"))
@@ -224,6 +241,8 @@ def summarize_architecture(model_dir: str, verbose: bool = False) -> List[str]:
         
         # Format output string with metadata
         output = condensed_name
+        if output.endswith('.weight'):
+            output = output[:-7]
         if shape:
             output += f",[{','.join(map(str, shape))}]"
         if dtype:

@@ -10,7 +10,8 @@ setup(
         # No strict requirements
     ],
     extras_require={
-        "full": ["safetensors"],  # Optional dependency
+        "full": ["safetensors", "huggingface_hub"],  # Optional dependencies
+        "hub": ["huggingface_hub"],  # For Hugging Face Hub support only
     },
     python_requires=">=3.6",
     entry_points={
