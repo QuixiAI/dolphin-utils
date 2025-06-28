@@ -267,7 +267,8 @@ def summarize_remote_architecture(repo_id: str, verbose: bool = False) -> List[s
             print(f"Processing {filename}...")
         
         header = read_remote_safetensors_header(repo_id, filename, verbose)
-        file_params = list(header.keys())
+        # Filter out metadata keys that aren't actual tensor parameters
+        file_params = [key for key in header.keys() if not key.startswith('__')]
         param_names.extend(file_params)
         
         # Map each parameter to its file
@@ -393,7 +394,8 @@ def summarize_architecture(model_dir: str, verbose: bool = False) -> List[str]:
         # Extract parameter names directly from safetensors headers
         for sf_file in safetensors_files:
             header = read_header_from_safetensors(sf_file)
-            file_params = list(header.keys())
+            # Filter out metadata keys that aren't actual tensor parameters
+            file_params = [key for key in header.keys() if not key.startswith('__')]
             param_names.extend(file_params)
             
             # Map each parameter to its file

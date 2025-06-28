@@ -1,4 +1,8 @@
-# dolphin-summarize
+# dolphin-utils
+
+A collection of utilities for AI/ML model analysis and processing.
+
+## dolphin-summarize
 
 This tool analyzes safetensors model files to generate a condensed summary of the model's architecture. It groups similar parameter names using range notation (e.g., `model.layers.[0-39].mlp.down_proj.weight`) and displays the shape and data type (precision) for each parameter group.
 
@@ -27,6 +31,19 @@ pip install -r requirements.txt
 
 ## Usage
 
+After installing the package:
+```bash
+pip install dolphin-utils
+```
+
+You can use the tool in two ways:
+
+**Via CLI command:**
+```bash
+dolphin-summarize [MODEL_PATH_OR_REPO_ID] [OPTIONS]
+```
+
+**Via Python module:**
 ```bash
 python -m dolphin_summarize [MODEL_PATH_OR_REPO_ID] [OPTIONS]
 ```

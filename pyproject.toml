@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dolphin-utils"
+version = "0.4.0"
+description = "Collection of utilities for AI/ML model analysis and processing"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [
+    {name = "Eric Hartford"}
+]
+keywords = ["machine-learning", "model-analysis", "safetensors", "huggingface", "architecture"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.7",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+requires-python = ">=3.7"
+dependencies = [
+    "huggingface_hub",
+    "requests",
+]
+
+[project.optional-dependencies]
+full = ["safetensors"]
+
+[project.urls]
+Homepage = "https://github.com/cognitivecomputations/dolphin-utils"
+Repository = "https://github.com/cognitivecomputations/dolphin-utils"
+Issues = "https://github.com/cognitivecomputations/dolphin-utils/issues"
+
+[project.scripts]
+dolphin-summarize = "dolphin_summarize.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["dolphin_summarize*"]
+
+[tool.setuptools.package-data]
+dolphin_summarize = ["*.py"]
