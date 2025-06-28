@@ -11,7 +11,7 @@ import requests
 import tempfile
 from collections import defaultdict
 from typing import Dict, List, Tuple, Optional
-from huggingface_hub import HfApi, hf_hub_url
+from huggingface_hub import HfApi, hf_hub_url, HfFolder
 
 
 def read_header_from_safetensors(file_path: str) -> dict:
@@ -84,8 +84,8 @@ def generate_range_notation(values: List[int]) -> str:
     if values == list(range(min(values), max(values) + 1)):
         return f"[{min(values)}-{max(values)}]"
     
-    # For non-continuous ranges, return a comma-separated list
-    return f"[{', '.join(map(str, values))}]"
+    # For non-continuous ranges, return a comma-separated list without spaces
+    return f"[{','.join(map(str, values))}]"
 
 
 def replace_patterns(names: List[str]) -> List[str]:
@@ -136,7 +136,17 @@ def get_repo_safetensors_files(repo_id: str, verbose: bool = False) -> List[str]
     Get list of all .safetensors files in a Hugging Face repository.
     """
     try:
-        api = HfApi()
+        # Get authentication token if available
+        token = None
+        try:
+            token = HfFolder.get_token()
+            if verbose and token:
+                print("Using Hugging Face authentication token for repository access")
+        except Exception:
+            if verbose:
+                print("No Hugging Face authentication token found for repository access")
+        
+        api = HfApi(token=token)
         repo_info = api.repo_info(repo_id)
         
         safetensors_files = []
@@ -159,6 +169,19 @@ def read_remote_safetensors_header(repo_id: str, filename: str, verbose: bool = 
     """
     url = hf_hub_url(repo_id, filename)
     
+    # Get authentication headers if available
+    auth_headers = {}
+    try:
+        # Try to get the token from HfFolder (where huggingface-cli login stores it)
+        token = HfFolder.get_token()
+        if token:
+            auth_headers['Authorization'] = f'Bearer {token}'
+            if verbose:
+                print("Using Hugging Face authentication token")
+    except Exception:
+        if verbose:
+            print("No Hugging Face authentication token found")
+    
     # Strategy 1: Try HTTP range request (most efficient)
     try:
         if verbose:
@@ -166,6 +189,7 @@ def read_remote_safetensors_header(repo_id: str, filename: str, verbose: bool = 
         
         # First, get the header size (first 8 bytes)
         headers = {'Range': 'bytes=0-7'}
+        headers.update(auth_headers)
         response = requests.get(url, headers=headers, timeout=30)
         
         if response.status_code == 206:  # Partial content
@@ -173,6 +197,7 @@ def read_remote_safetensors_header(repo_id: str, filename: str, verbose: bool = 
             
             # Now get the full header
             headers = {'Range': f'bytes=0-{header_size + 7}'}
+            headers.update(auth_headers)
             response = requests.get(url, headers=headers, timeout=30)
             
             if response.status_code == 206:
@@ -190,7 +215,7 @@ def read_remote_safetensors_header(repo_id: str, filename: str, verbose: bool = 
         if verbose:
             print(f"Trying streaming approach for {filename}...")
         
-        response = requests.get(url, stream=True, timeout=30)
+        response = requests.get(url, headers=auth_headers, stream=True, timeout=30)
         response.raise_for_status()
         
         # Read header size
@@ -226,7 +251,7 @@ def read_remote_safetensors_header(repo_id: str, filename: str, verbose: bool = 
             print(f"Falling back to full download for {filename}...")
         
         with tempfile.NamedTemporaryFile(delete=False) as temp_file:
-            response = requests.get(url, timeout=300)  # Longer timeout for full download
+            response = requests.get(url, headers=auth_headers, timeout=300)  # Longer timeout for full download
             response.raise_for_status()
             
             temp_file.write(response.content)
