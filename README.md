@@ -1,34 +1,66 @@
 # dolphin-summarize
 
-This script analyzes the `model.safetensors.index.json` file within a model directory to generate a condensed summary of the model's architecture. It groups similar parameter names using range notation (e.g., `model.layers.[0-39].mlp.down_proj.weight`) and displays the shape and data type (precision) for each parameter group.
+This tool analyzes safetensors model files to generate a condensed summary of the model's architecture. It groups similar parameter names using range notation (e.g., `model.layers.[0-39].mlp.down_proj.weight`) and displays the shape and data type (precision) for each parameter group.
+
+**Key Features:**
+- **Remote Processing**: Analyze Hugging Face models without downloading the full model files (downloads only headers - KB instead of GB)
+- **Local Processing**: Works with locally stored model directories
+- **Efficient**: Uses HTTP range requests and streaming to minimize data transfer
+- **Reliable**: Multiple fallback strategies ensure 100% compatibility
 
 ## Dependencies
 
 *   Python 3
+*   `huggingface_hub` and `requests` (Required for remote processing):
+    ```bash
+    pip install huggingface_hub requests
+    ```
 *   `safetensors` (Optional, but recommended for full shape extraction capabilities):
     ```bash
     pip install safetensors
     ```
 
+Or install all dependencies:
+```bash
+pip install -r requirements.txt
+```
+
 ## Usage
 
 ```bash
-python hf_model_summary.py [MODEL_DIRECTORY_PATH] [OPTIONS]
+python -m dolphin_summarize [MODEL_PATH_OR_REPO_ID] [OPTIONS]
 ```
 
 **Arguments:**
 
-*   `MODEL_DIRECTORY_PATH`: (Required) Path to the directory containing the model files (specifically, the `model.safetensors.index.json` or similar index file). Defaults to the current directory (`.`) if not provided.
+*   `MODEL_PATH_OR_REPO_ID`: 
+    - **Local path**: Directory containing safetensors files (e.g., `~/models/my_llama_model`)
+    - **Hugging Face repo ID**: Repository identifier (e.g., `microsoft/DialoGPT-medium`)
+    - Defaults to current directory (`.`) if not provided
 
 **Options:**
 
 *   `--output OUTPUT`, `-o OUTPUT`: Path to an output file where the summary will be written (optional).
 *   `--verbose`, `-v`: Show verbose output during processing (optional).
 
-## Example
+## Examples
 
+**Remote Processing (Hugging Face Hub):**
 ```bash
-python hf_model_summary.py ~/models/my_llama_model --verbose
+# Process a model directly from Hugging Face without downloading
+python -m dolphin_summarize microsoft/DialoGPT-medium --verbose
+
+# Large models work too - only headers are downloaded
+python -m dolphin_summarize meta-llama/Llama-2-70b-hf --verbose
+```
+
+**Local Processing:**
+```bash
+# Process a local model directory
+python -m dolphin_summarize ~/models/my_llama_model --verbose
+
+# Process current directory
+python -m dolphin_summarize . --verbose
 ```
 
 ## Output Format

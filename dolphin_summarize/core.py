@@ -7,8 +7,11 @@ import re
 import os
 import glob
 import struct
+import requests
+import tempfile
 from collections import defaultdict
 from typing import Dict, List, Tuple, Optional
+from huggingface_hub import HfApi, hf_hub_url
 
 
 def read_header_from_safetensors(file_path: str) -> dict:
@@ -124,6 +127,222 @@ def replace_patterns(names: List[str]) -> List[str]:
                 template = re.sub(pattern_regex, prefix + range_notation + suffix, template)
         
         result.append(template)
+    
+    return sorted(result)
+
+
+def get_repo_safetensors_files(repo_id: str, verbose: bool = False) -> List[str]:
+    """
+    Get list of all .safetensors files in a Hugging Face repository.
+    """
+    try:
+        api = HfApi()
+        repo_info = api.repo_info(repo_id)
+        
+        safetensors_files = []
+        for sibling in repo_info.siblings:
+            if sibling.rfilename.endswith('.safetensors'):
+                safetensors_files.append(sibling.rfilename)
+        
+        if verbose:
+            print(f"Found {len(safetensors_files)} safetensors files in {repo_id}")
+            
+        return safetensors_files
+    except Exception as e:
+        raise ValueError(f"Failed to get repository info for {repo_id}: {str(e)}")
+
+
+def read_remote_safetensors_header(repo_id: str, filename: str, verbose: bool = False) -> dict:
+    """
+    Read safetensors header from a remote Hugging Face repository.
+    Uses multiple fallback strategies for maximum reliability.
+    """
+    url = hf_hub_url(repo_id, filename)
+    
+    # Strategy 1: Try HTTP range request (most efficient)
+    try:
+        if verbose:
+            print(f"Trying range request for {filename}...")
+        
+        # First, get the header size (first 8 bytes)
+        headers = {'Range': 'bytes=0-7'}
+        response = requests.get(url, headers=headers, timeout=30)
+        
+        if response.status_code == 206:  # Partial content
+            header_size = struct.unpack('<Q', response.content)[0]
+            
+            # Now get the full header
+            headers = {'Range': f'bytes=0-{header_size + 7}'}
+            response = requests.get(url, headers=headers, timeout=30)
+            
+            if response.status_code == 206:
+                header_json = response.content[8:8+header_size]
+                header = json.loads(header_json)
+                if verbose:
+                    print(f"Successfully read header via range request ({len(header)} tensors)")
+                return header
+    except Exception as e:
+        if verbose:
+            print(f"Range request failed: {str(e)}")
+    
+    # Strategy 2: Try streaming (read just enough bytes)
+    try:
+        if verbose:
+            print(f"Trying streaming approach for {filename}...")
+        
+        response = requests.get(url, stream=True, timeout=30)
+        response.raise_for_status()
+        
+        # Read header size
+        header_size_bytes = b''
+        for chunk in response.iter_content(chunk_size=8):
+            header_size_bytes += chunk
+            if len(header_size_bytes) >= 8:
+                break
+        
+        header_size = struct.unpack('<Q', header_size_bytes[:8])[0]
+        
+        # Read the header
+        header_bytes = header_size_bytes[8:]
+        bytes_needed = header_size - len(header_bytes)
+        
+        for chunk in response.iter_content(chunk_size=min(bytes_needed, 8192)):
+            header_bytes += chunk
+            if len(header_bytes) >= header_size:
+                break
+        
+        header = json.loads(header_bytes[:header_size])
+        if verbose:
+            print(f"Successfully read header via streaming ({len(header)} tensors)")
+        return header
+        
+    except Exception as e:
+        if verbose:
+            print(f"Streaming failed: {str(e)}")
+    
+    # Strategy 3: Full download to temporary file (guaranteed to work)
+    try:
+        if verbose:
+            print(f"Falling back to full download for {filename}...")
+        
+        with tempfile.NamedTemporaryFile(delete=False) as temp_file:
+            response = requests.get(url, timeout=300)  # Longer timeout for full download
+            response.raise_for_status()
+            
+            temp_file.write(response.content)
+            temp_file.flush()
+            
+            # Read header from the temporary file
+            header = read_header_from_safetensors(temp_file.name)
+            
+            # Clean up
+            os.unlink(temp_file.name)
+            
+            if verbose:
+                print(f"Successfully read header via full download ({len(header)} tensors)")
+            return header
+            
+    except Exception as e:
+        if verbose:
+            print(f"Full download failed: {str(e)}")
+        raise ValueError(f"Failed to read header from {filename} using all methods: {str(e)}")
+
+
+def summarize_remote_architecture(repo_id: str, verbose: bool = False) -> List[str]:
+    """
+    Generate a condensed summary of tensor names from a remote Hugging Face repository.
+    """
+    # Get list of safetensors files
+    safetensors_files = get_repo_safetensors_files(repo_id, verbose)
+    
+    if not safetensors_files:
+        raise ValueError(f"No safetensors files found in repository {repo_id}")
+    
+    # Read headers from all files
+    param_names = []
+    param_file_map = {}
+    
+    for filename in safetensors_files:
+        if verbose:
+            print(f"Processing {filename}...")
+        
+        header = read_remote_safetensors_header(repo_id, filename, verbose)
+        file_params = list(header.keys())
+        param_names.extend(file_params)
+        
+        # Map each parameter to its file
+        for param in file_params:
+            param_file_map[param] = filename
+    
+    if verbose:
+        print(f"Found {len(param_names)} total parameters across {len(safetensors_files)} files")
+    
+    if not param_names:
+        raise ValueError("Could not extract any parameter names from safetensors files")
+    
+    # Process the parameters and get condensed names
+    condensed_names = replace_patterns(param_names)
+    
+    # Add metadata (shape and dtype) to the condensed names
+    result = []
+    
+    # Cache headers to avoid repeated downloads
+    header_cache = {}
+    
+    for condensed_name in condensed_names:
+        # Find an original parameter that matches this condensed pattern
+        base_pattern = condensed_name
+        for range_notation in re.findall(r'\[\d+(?:-\d+)?\]', condensed_name):
+            # Replace range notations with regex patterns to match any number in the range
+            if '-' in range_notation:
+                base_pattern = base_pattern.replace(range_notation, r'\d+')
+            else:
+                # Single number in brackets like [5]
+                num = range_notation.strip('[]')
+                base_pattern = base_pattern.replace(range_notation, num)
+        
+        base_regex = re.compile(f'^{base_pattern}$'.replace(r'\d+', r'(\d+)'))
+        
+        # Find a matching original parameter
+        representative = None
+        for param in param_names:
+            if base_regex.match(param):
+                representative = param
+                break
+        
+        if not representative:
+            # If no matching parameter found, just add the condensed name
+            result.append(condensed_name)
+            continue
+        
+        # Get the file containing this parameter
+        filename = param_file_map.get(representative)
+        if not filename:
+            result.append(condensed_name)
+            continue
+        
+        # Get header for this file (use cache if available)
+        if filename not in header_cache:
+            header_cache[filename] = read_remote_safetensors_header(repo_id, filename, verbose)
+        
+        header = header_cache[filename]
+        
+        # Extract metadata
+        if representative in header:
+            info = header[representative]
+            shape = info.get('shape')
+            dtype = info.get('dtype')
+        else:
+            shape, dtype = None, None
+        
+        # Format output string with metadata
+        output = condensed_name
+        if shape:
+            output += f",[{','.join(map(str, shape))}]"
+        if dtype:
+            output += f",{dtype}"
+        
+        result.append(output)
     
     return sorted(result)
 

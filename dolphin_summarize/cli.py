@@ -22,33 +22,22 @@ def is_huggingface_repo(repo_id):
     # Simple heuristic: if it contains a slash and doesn't exist as a local path
     return "/" in repo_id and not os.path.exists(repo_id)
 
-def download_from_huggingface(repo_id, verbose=False):
-    """Download model from Hugging Face Hub."""
+def process_huggingface_repo(repo_id, verbose=False):
+    """Process model from Hugging Face Hub using remote header reading."""
     try:
-        from huggingface_hub import snapshot_download
         if verbose:
-            print(f"Downloading {repo_id} from Hugging Face Hub...")
+            print(f"Processing {repo_id} from Hugging Face Hub (remote header reading)...")
         
-        # Create a temporary directory that will be automatically cleaned up
-        with tempfile.TemporaryDirectory() as temp_dir:
-            download_path = snapshot_download(
-                repo_id=repo_id,
-                local_dir=temp_dir,
-                allow_patterns=["*.json", "*.safetensors", "*.safetensors.index.json"],
-            )
-            if verbose:
-                print(f"Downloaded to temporary location: {download_path}")
-                
-            # Process the downloaded model
-            condensed_summary = core.summarize_architecture(download_path, verbose)
-            return condensed_summary
+        # Use the new remote processing function
+        condensed_summary = core.summarize_remote_architecture(repo_id, verbose)
+        return condensed_summary
             
     except ImportError:
-        print("Error: huggingface_hub package is required to download from Hugging Face Hub.")
-        print("Install with: pip install huggingface_hub")
+        print("Error: huggingface_hub and requests packages are required for remote processing.")
+        print("Install with: pip install huggingface_hub requests")
         sys.exit(1)
     except Exception as e:
-        print(f"Error downloading from Hugging Face Hub: {str(e)}")
+        print(f"Error processing Hugging Face repository: {str(e)}")
         sys.exit(1)
 
 def main():
@@ -64,8 +53,8 @@ def main():
         
         # Determine if input is a local path or a Hugging Face repo
         if is_huggingface_repo(args.repo_or_path):
-            # Download and process from Hugging Face Hub
-            condensed_summary = download_from_huggingface(args.repo_or_path, args.verbose)
+            # Process from Hugging Face Hub using remote header reading
+            condensed_summary = process_huggingface_repo(args.repo_or_path, args.verbose)
         else:
             # Process local directory
             if args.verbose:
