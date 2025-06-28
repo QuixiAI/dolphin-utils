@@ -45,12 +45,6 @@ def main():
     args = parse_args()
     
     try:
-        try:
-            import safetensors
-        except ImportError:
-            print("Warning: safetensors package not installed. Shape extraction may be limited.")
-            print("Install with: pip install safetensors")
-        
         # Determine if input is a local path or a Hugging Face repo
         if is_huggingface_repo(args.repo_or_path):
             # Process from Hugging Face Hub using remote header reading

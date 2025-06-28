@@ -14,19 +14,14 @@ This tool analyzes safetensors model files to generate a condensed summary of th
 
 ## Dependencies
 
-*   Python 3
-*   `huggingface_hub` and `requests` (Required for remote processing):
-    ```bash
-    pip install huggingface_hub requests
-    ```
-*   `safetensors` (Optional, but recommended for full shape extraction capabilities):
-    ```bash
-    pip install safetensors
-    ```
+*   Python 3.7+
+*   `huggingface_hub` - For accessing Hugging Face repositories
+*   `requests` - For HTTP requests and remote file access
+*   `safetensors` - For reading safetensors file headers
 
-Or install all dependencies:
+All dependencies are automatically installed when you install the package:
 ```bash
-pip install -r requirements.txt
+pip install dolphin-utils
 ```
 
 ## Usage
