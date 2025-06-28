@@ -241,8 +241,6 @@ def summarize_architecture(model_dir: str, verbose: bool = False) -> List[str]:
         
         # Format output string with metadata
         output = condensed_name
-        if output.endswith('.weight'):
-            output = output[:-7]
         if shape:
             output += f",[{','.join(map(str, shape))}]"
         if dtype:
