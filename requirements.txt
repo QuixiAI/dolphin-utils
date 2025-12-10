@@ -1,6 +1,0 @@
-# Optional, but recommended for full shape extraction
-safetensors
-
-# Required for remote processing of Hugging Face repositories
-huggingface_hub
-requests

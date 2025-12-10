@@ -11,7 +11,8 @@ import requests
 import tempfile
 from collections import defaultdict
 from typing import Dict, List, Tuple, Optional
-from huggingface_hub import HfApi, hf_hub_url, HfFolder
+from huggingface_hub import HfApi, hf_hub_url
+from huggingface_hub.utils import get_token
 
 
 def read_header_from_safetensors(file_path: str) -> dict:
@@ -139,7 +140,7 @@ def get_repo_safetensors_files(repo_id: str, verbose: bool = False) -> List[str]
         # Get authentication token if available
         token = None
         try:
-            token = HfFolder.get_token()
+            token = get_token()
             if verbose and token:
                 print("Using Hugging Face authentication token for repository access")
         except Exception:
@@ -172,8 +173,8 @@ def read_remote_safetensors_header(repo_id: str, filename: str, verbose: bool = 
     # Get authentication headers if available
     auth_headers = {}
     try:
-        # Try to get the token from HfFolder (where huggingface-cli login stores it)
-        token = HfFolder.get_token()
+        # Try to get the token from huggingface_hub
+        token = get_token()
         if token:
             auth_headers['Authorization'] = f'Bearer {token}'
             if verbose:
