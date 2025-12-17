@@ -1,0 +1,15 @@
+lm_head,[152064,8192],BF16
+model.embed_tokens,[152064,8192],BF16
+model.layers.[0-79].input_layernorm,[8192],BF16
+model.layers.[0-79].mlp.down_proj,[8192,29568],BF16
+model.layers.[0-79].mlp.gate_proj,[29568,8192],BF16
+model.layers.[0-79].mlp.up_proj,[29568,8192],BF16
+model.layers.[0-79].post_attention_layernorm,[8192],BF16
+model.layers.[0-79].self_attn.k_proj,[1024,8192],BF16
+model.layers.[0-79].self_attn.k_proj.bias,[1024],BF16
+model.layers.[0-79].self_attn.o_proj,[8192,8192],BF16
+model.layers.[0-79].self_attn.q_proj,[8192,8192],BF16
+model.layers.[0-79].self_attn.q_proj.bias,[8192],BF16
+model.layers.[0-79].self_attn.v_proj,[1024,8192],BF16
+model.layers.[0-79].self_attn.v_proj.bias,[1024],BF16
+model.norm,[8192],BF16
