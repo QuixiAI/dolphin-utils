@@ -89,6 +89,21 @@ def generate_range_notation(values: List[int]) -> str:
     return f"[{','.join(map(str, values))}]"
 
 
+def _condense_group(items: List[str]) -> str:
+    """Collapse one structure-uniform group of names into range notation."""
+    if len(items) == 1:
+        return items[0]
+    patterns = identify_patterns(items)
+    template = items[0]
+    for pattern, values in patterns.items():
+        if len(values) > 1:  # Only replace if there are multiple values
+            prefix, suffix = pattern.split('[N]')
+            pattern_regex = re.escape(prefix) + r'(\d+)' + re.escape(suffix)
+            range_notation = generate_range_notation(values)
+            template = re.sub(pattern_regex, prefix + range_notation + suffix, template)
+    return template
+
+
 def replace_patterns(names: List[str]) -> List[str]:
     """
     Replace numeric patterns in strings with range notations.
@@ -96,40 +111,45 @@ def replace_patterns(names: List[str]) -> List[str]:
     """
     # First group strings by their structure (ignoring numeric values)
     structure_map = defaultdict(list)
-    
-    # Create a regex to match numeric parts
     numeric_re = re.compile(r'\d+')
-    
     for name in names:
         # Replace all numeric parts with a placeholder to get the structure
         structure = numeric_re.sub('NUM', name)
         structure_map[structure].append(name)
-    
-    # Process each structure group separately
+    return sorted(_condense_group(items) for items in structure_map.values())
+
+
+def replace_patterns_with_metadata(names, meta_of):
+    """Consolidate names into range notation WITHOUT merging tensors whose
+    shape or dtype differ.
+
+    Plain name-pattern grouping can collapse e.g. ``layers.[0-45].o_proj``
+    over layers where the tensor is [4096,8192] on some layers and
+    [4096,16384] on others (hybrid models), and the single reported shape
+    is then wrong for part of the range. Grouping here is keyed on
+    (structure, shape, dtype), and each condensed name is returned with a
+    representative member so callers annotate from a tensor that is
+    guaranteed to share the whole group's metadata.
+
+    Returns a list of (condensed_name, representative_name, shape, dtype).
+    """
+    structure_map = defaultdict(list)
+    numeric_re = re.compile(r'\d+')
+    for name in names:
+        structure = numeric_re.sub('NUM', name)
+        shape, dtype = meta_of(name)
+        key = (structure, tuple(shape) if shape else None, dtype)
+        structure_map[key].append(name)
     result = []
-    
-    for structure, items in structure_map.items():
-        if len(items) == 1:
-            # No consolidation needed for single items
-            result.append(items[0])
-            continue
-        
-        # Find all numeric patterns in this structure group
-        patterns = identify_patterns(items)
-        
-        # Start with the first item as a template and replace numeric parts
-        template = items[0]
-        for pattern, values in patterns.items():
-            if len(values) > 1:  # Only replace if there are multiple values
-                prefix, suffix = pattern.split('[N]')
-                # Create regex pattern to match exactly this occurrence
-                pattern_regex = re.escape(prefix) + r'(\d+)' + re.escape(suffix)
-                range_notation = generate_range_notation(values)
-                template = re.sub(pattern_regex, prefix + range_notation + suffix, template)
-        
-        result.append(template)
-    
-    return sorted(result)
+    for (_, shape, dtype), items in structure_map.items():
+        result.append((
+            _condense_group(items),
+            items[0],
+            list(shape) if shape else None,
+            dtype,
+        ))
+    result.sort(key=lambda r: r[0])
+    return result
 
 
 def get_repo_safetensors_files(repo_id: str, verbose: bool = False) -> List[str]:
@@ -284,22 +304,24 @@ def summarize_remote_architecture(repo_id: str, verbose: bool = False) -> List[s
     if not safetensors_files:
         raise ValueError(f"No safetensors files found in repository {repo_id}")
     
-    # Read headers from all files
+    # Read headers from all files, keeping shape/dtype for every tensor so
+    # consolidation cannot merge tensors with differing metadata.
     param_names = []
-    param_file_map = {}
+    param_meta = {}
     
     for filename in safetensors_files:
         if verbose:
             print(f"Processing {filename}...")
         
         header = read_remote_safetensors_header(repo_id, filename, verbose)
-        # Filter out metadata keys that aren't actual tensor parameters
-        file_params = [key for key in header.keys() if not key.startswith('__')]
-        param_names.extend(file_params)
-        
-        # Map each parameter to its file
-        for param in file_params:
-            param_file_map[param] = filename
+        for key, info in header.items():
+            if key.startswith('__'):
+                continue
+            param_names.append(key)
+            param_meta[key] = (
+                info.get('shape') if isinstance(info, dict) else None,
+                info.get('dtype') if isinstance(info, dict) else None,
+            )
     
     if verbose:
         print(f"Found {len(param_names)} total parameters across {len(safetensors_files)} files")
@@ -307,70 +329,17 @@ def summarize_remote_architecture(repo_id: str, verbose: bool = False) -> List[s
     if not param_names:
         raise ValueError("Could not extract any parameter names from safetensors files")
     
-    # Process the parameters and get condensed names
-    condensed_names = replace_patterns(param_names)
-    
-    # Add metadata (shape and dtype) to the condensed names
+    # Consolidate without merging across differing shape/dtype, then emit.
     result = []
-    
-    # Cache headers to avoid repeated downloads
-    header_cache = {}
-    
-    for condensed_name in condensed_names:
-        # Find an original parameter that matches this condensed pattern
-        base_pattern = condensed_name
-        for range_notation in re.findall(r'\[\d+(?:-\d+)?\]', condensed_name):
-            # Replace range notations with regex patterns to match any number in the range
-            if '-' in range_notation:
-                base_pattern = base_pattern.replace(range_notation, r'\d+')
-            else:
-                # Single number in brackets like [5]
-                num = range_notation.strip('[]')
-                base_pattern = base_pattern.replace(range_notation, num)
-        
-        base_regex = re.compile(f'^{base_pattern}$'.replace(r'\d+', r'(\d+)'))
-        
-        # Find a matching original parameter
-        representative = None
-        for param in param_names:
-            if base_regex.match(param):
-                representative = param
-                break
-        
-        if not representative:
-            # If no matching parameter found, just add the condensed name
-            result.append(condensed_name)
-            continue
-        
-        # Get the file containing this parameter
-        filename = param_file_map.get(representative)
-        if not filename:
-            result.append(condensed_name)
-            continue
-        
-        # Get header for this file (use cache if available)
-        if filename not in header_cache:
-            header_cache[filename] = read_remote_safetensors_header(repo_id, filename, verbose)
-        
-        header = header_cache[filename]
-        
-        # Extract metadata
-        if representative in header:
-            info = header[representative]
-            shape = info.get('shape')
-            dtype = info.get('dtype')
-        else:
-            shape, dtype = None, None
-        
-        # Format output string with metadata
-        output = condensed_name
+    for condensed, _rep, shape, dtype in replace_patterns_with_metadata(
+        param_names, lambda n: param_meta.get(n, (None, None))
+    ):
+        output = condensed
         if shape:
             output += f",[{','.join(map(str, shape))}]"
         if dtype:
             output += f",{dtype}"
-        
         result.append(output)
-    
     return sorted(result)
 
 
@@ -439,60 +408,33 @@ def summarize_architecture(model_dir: str, verbose: bool = False) -> List[str]:
     if verbose:
         print(f"Found {len(safetensors_files)} safetensors files")
     
-    # Process the file and get condensed parameter names
-    condensed_names = replace_patterns(param_names)
-    
-    # Add metadata (shape and dtype) to the condensed names
+    # Consolidate without merging across differing shape/dtype, reading
+    # each shard header at most once.
+    header_cache = {}
+
+    def _meta_of(name):
+        filename = param_file_map.get(name)
+        if not filename:
+            return (None, None)
+        file_path = os.path.join(model_dir, filename)
+        if file_path not in header_cache:
+            if not os.path.exists(file_path):
+                header_cache[file_path] = {}
+            else:
+                header_cache[file_path] = read_header_from_safetensors(file_path)
+        info = header_cache[file_path].get(name)
+        if not isinstance(info, dict):
+            return (None, None)
+        return (info.get('shape'), info.get('dtype'))
+
     result = []
-    
-    # Cache tensor metadata to avoid repeated file reads
-    metadata_cache = {}
-    
-    for condensed_name in condensed_names:
-        # Find an original parameter that matches this condensed pattern
-        base_pattern = condensed_name
-        for range_notation in re.findall(r'\[\d+(?:-\d+)?\]', condensed_name):
-            # Replace range notations with regex patterns to match any number in the range
-            if '-' in range_notation:
-                base_pattern = base_pattern.replace(range_notation, r'\d+')
-            else:
-                # Single number in brackets like [5]
-                num = range_notation.strip('[]')
-                base_pattern = base_pattern.replace(range_notation, num)
-        
-        base_regex = re.compile(f'^{base_pattern}$'.replace(r'\d+', r'(\d+)'))
-        
-        # Find a matching original parameter
-        representative = None
-        for param in param_names:
-            if base_regex.match(param):
-                representative = param
-                break
-        
-        if not representative:
-            # If no matching parameter found, just add the condensed name
-            result.append(condensed_name)
-            continue
-        
-        # Extract metadata for the representative parameter
-        if representative in metadata_cache:
-            shape, dtype = metadata_cache[representative]
-        else:
-            # Find the file containing this parameter
-            file_path = os.path.join(model_dir, param_file_map.get(representative, ''))
-            if os.path.exists(file_path):
-                shape, dtype = extract_metadata(file_path, representative)
-                metadata_cache[representative] = (shape, dtype)
-            else:
-                shape, dtype = None, None
-        
-        # Format output string with metadata
-        output = condensed_name
+    for condensed, _rep, shape, dtype in replace_patterns_with_metadata(
+        param_names, _meta_of
+    ):
+        output = condensed
         if shape:
             output += f",[{','.join(map(str, shape))}]"
         if dtype:
             output += f",{dtype}"
-        
         result.append(output)
-    
     return sorted(result)
